@@ -213,10 +213,10 @@ function Get-NanoUsbInfo($adb) {
 
 function Enable-NanoRndisViaAdb($adb) {
     Write-Info ("Configuring USB link on Nano ({0}) for Windows internet..." -f $adb.Serial)
-    $cmd = 'mkdir -p /mnt/USB-link; C=/mnt/USB-link/usblink.conf; T=$C.new; { [ -f "$C" ] && grep -v -E "^(NETWORK|ADDRESS|DNS)=" "$C" | tr -d "\r"; printf "NETWORK=rndis\nADDRESS=dhcp\nDNS=1.1.1.1\n"; } > "$T" && mv "$T" "$C" && sync; if [ -x /tmp/usblink-watch.sh ]; then USBLINK_QUIET=1 setsid sh /tmp/usblink-watch.sh </dev/null >/dev/null 2>&1 & echo started; else OPK=/mnt/Applications/Connect.opk; [ -f "$OPK" ] || OPK=/mnt/Applications/USBLink.opk; if [ ! -f "$OPK" ]; then echo no_opk; else M=/tmp/.usblink_setup_mnt; mkdir -p "$M"; if mount -o loop,ro "$OPK" "$M" 2>/dev/null; then cp "$M/usblink.sh" /tmp/usblink-setup.sh; chmod +x /tmp/usblink-setup.sh; umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; USBLINK_QUIET=1 setsid sh /tmp/usblink-setup.sh </dev/null >/dev/null 2>&1 & echo started; else echo mount_failed; fi; fi; fi'
+    $cmd = 'mkdir -p /mnt/USB-link; C=/mnt/USB-link/usblink.conf; T=$C.new; { [ -f "$C" ] && grep -v -E "^(NETWORK|ADDRESS|DNS)=" "$C" | tr -d "\r"; printf "NETWORK=rndis\nADDRESS=dhcp\nDNS=1.1.1.1\n"; } > "$T" && mv "$T" "$C" && sync; if [ -x /tmp/usblink-watch.sh ]; then USBLINK_QUIET=1 setsid sh /tmp/usblink-watch.sh </dev/null >/dev/null 2>&1 & echo started; else OPK=""; for p in "/mnt/Native games/Connect.opk" /mnt/Applications/Connect.opk "/mnt/Native games/USBLink.opk" /mnt/Applications/USBLink.opk; do [ -f "$p" ] && OPK="$p" && break; done; if [ ! -f "$OPK" ]; then echo no_opk; else M=/tmp/.usblink_setup_mnt; mkdir -p "$M"; if mount -o loop,ro "$OPK" "$M" 2>/dev/null; then cp "$M/usblink.sh" /tmp/usblink-setup.sh; chmod +x /tmp/usblink-setup.sh; umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; USBLINK_QUIET=1 setsid sh /tmp/usblink-setup.sh </dev/null >/dev/null 2>&1 & echo started; else echo mount_failed; fi; fi; fi'
     $res = Invoke-AdbRaw $adb.Bin $adb.Serial $cmd
     if ($res -match 'no_opk') {
-        throw 'Connect.opk or USBLink.opk is not installed in /mnt/Applications on the Nano.'
+        throw 'Connect.opk or USBLink.opk is not installed in /mnt/Native games or /mnt/Applications on the Nano.'
     }
     if ($res -match 'mount_failed') {
         throw 'Could not mount Connect.opk/USBLink.opk on the Nano; run Connect -> USB -> Reconnect on the Nano instead.'
@@ -224,7 +224,7 @@ function Enable-NanoRndisViaAdb($adb) {
 }
 
 function Renew-NanoDhcpViaAdb($adb) {
-    $cmd = 'IF=""; for f in /sys/kernel/config/usb_gadget/FunKey/functions/rndis.usb0/ifname /sys/kernel/config/usb_gadget/FunKey/functions/ncm.usb0/ifname; do [ -f "$f" ] && IF="$(cat "$f")" && break; done; [ -n "$IF" ] || exit 0; if [ -x /tmp/usblink-watch.sh ]; then USBLINK_LINKTEST="$IF" sh /tmp/usblink-watch.sh; elif [ -x /tmp/usblink-setup.sh ]; then USBLINK_LINKTEST="$IF" sh /tmp/usblink-setup.sh; else OPK=/mnt/Applications/Connect.opk; [ -f "$OPK" ] || OPK=/mnt/Applications/USBLink.opk; M=/tmp/.usblink_setup_mnt; mkdir -p "$M"; if [ -f "$OPK" ] && mount -o loop,ro "$OPK" "$M" 2>/dev/null; then cp "$M/usblink.sh" /tmp/usblink-setup.sh; chmod +x /tmp/usblink-setup.sh; umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; USBLINK_LINKTEST="$IF" sh /tmp/usblink-setup.sh; fi; fi'
+    $cmd = 'IF=""; for f in /sys/kernel/config/usb_gadget/FunKey/functions/rndis.usb0/ifname /sys/kernel/config/usb_gadget/FunKey/functions/ncm.usb0/ifname; do [ -f "$f" ] && IF="$(cat "$f")" && break; done; [ -n "$IF" ] || exit 0; if [ -x /tmp/usblink-watch.sh ]; then USBLINK_LINKTEST="$IF" sh /tmp/usblink-watch.sh; elif [ -x /tmp/usblink-setup.sh ]; then USBLINK_LINKTEST="$IF" sh /tmp/usblink-setup.sh; else OPK=""; for p in "/mnt/Native games/Connect.opk" /mnt/Applications/Connect.opk "/mnt/Native games/USBLink.opk" /mnt/Applications/USBLink.opk; do [ -f "$p" ] && OPK="$p" && break; done; M=/tmp/.usblink_setup_mnt; mkdir -p "$M"; if [ -f "$OPK" ] && mount -o loop,ro "$OPK" "$M" 2>/dev/null; then cp "$M/usblink.sh" /tmp/usblink-setup.sh; chmod +x /tmp/usblink-setup.sh; umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; USBLINK_LINKTEST="$IF" sh /tmp/usblink-setup.sh; fi; fi'
     return Invoke-AdbRaw $adb.Bin $adb.Serial $cmd
 }
 

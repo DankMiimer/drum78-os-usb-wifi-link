@@ -29,6 +29,7 @@ REMOTE="$REPO/nanoctl"
 WORK="${WIFI_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/rg-nano-adb-tools/wifi}"
 OUT="$HERE/Connect.opk"
 APPS="/mnt/Applications"
+NATIVE="/mnt/Native games"
 
 MODE="${1:-}"
 case "$MODE" in ""|--refresh|--build-only|--retire-old) ;; *) sed -n '2,24p' "$0"; exit 2 ;; esac
@@ -128,9 +129,12 @@ case "$MODE" in
 esac
 
 "$REMOTE" push "$OUT" "$APPS/Connect.opk"
+python3 "$REPO/usbmode/make_icon.py" connect "$STAGE/connect.png" --preview >/dev/null
+"$REMOTE" push "$STAGE/connect_x8.png" "/tmp/connect_x8.png"
+"$REMOTE" run "mkdir -p '$NATIVE' && cp -f '$APPS/Connect.opk' '$NATIVE/Connect.opk' && mv -f /tmp/connect_x8.png '$NATIVE/Connect.png' && sync"
 if [ "$MODE" = "--refresh" ]; then
-  "$REMOTE" run 'pkill gmenu2x && echo "menu restarted" || echo "gmenu2x is not running (an app is open?); the entry appears the next time the menu starts"'
+  "$REMOTE" run 'if pkill -x retrofe 2>/dev/null || pkill -x gmenu2x 2>/dev/null; then echo "menu restarted"; else echo "menu not running; entry appears next time it starts"; fi'
 else
-  echo "installed. Restart the menu to see it (re-run with --refresh, or reboot the Nano)."
+  echo "installed to Native games (RetroFE) and Applications (GMenu2X). Re-run with --refresh, or reopen the menu."
 fi
 echo "The apps it replaces are still there: --retire-old parks them."

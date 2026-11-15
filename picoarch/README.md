@@ -5,7 +5,7 @@ Stock [DrUm78/FunKey-OS](https://github.com/DrUm78/FunKey-OS) ships `/usr/games/
 ## How it installs
 
 ### Option A: Directly on the handheld (recommended, no PC needed)
-1. Install `Connect.opk` into `/mnt/Applications/`.
+1. Copy `Connect.opk` into `/mnt/Native games/` (for **RetroFE**, FunKey-OS default) and/or `/mnt/Applications/` (for **GMenu2X**).
 2. Open **Connect → Achievements → Game Patch** and choose **Enable In-Game RA**.
 3. On writable ext4 FunKey-OS rootfs builds (e.g. DrUm78's releases for RG Nano, GBA Mini, and FunKey S), Connect checks free space, backs up stock `/usr/games/picoarch` to `/usr/games/picoarch.orig` (if not already backed up), atomically installs the bundled ARM binary, verifies `--help` execution (rolling back to `.orig` automatically if a library check fails), and restores `/` read-only when finished. You can select **Restore Stock** from the same menu anytime.
 

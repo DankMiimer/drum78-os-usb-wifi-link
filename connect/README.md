@@ -2,8 +2,8 @@
 
 **One app instead of four.** Connect puts [Wi-Fi](../wifi/README.md),
 [USB Link](../usblink/README.md) and the [USB Mode](../usbmode/README.md) switch
-behind a single entry in the **Applications** menu (for **RG Nano**, **FunKey S**,
-and **GBA Mini** running DrUm78's FunKey-OS builds), and adds the USB Link
+behind a single entry in **Native games** (RetroFE) / **Applications** (GMenu2X)
+(for **RG Nano**, **FunKey S**, and **GBA Mini** running DrUm78's FunKey-OS builds), and adds the USB Link
 settings that used to need a file edited on the PC. On the GBA Mini it draws
 inside its 240×160 visible screen area and hides the Wi-Fi row on
 peripheral-only handhelds (GBA Mini and FunKey S — only the RG Nano enables USB OTG/host mode in DrUm78's kernel, so USB Wi-Fi dongles work on RG Nano only).
