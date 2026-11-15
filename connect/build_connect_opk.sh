@@ -128,13 +128,13 @@ case "$MODE" in
   --build-only) exit 0 ;;
 esac
 
-"$REMOTE" push "$OUT" "$APPS/Connect.opk"
+"$REMOTE" push "$OUT" "/mnt/.Connect.opk.tmp"
 python3 "$REPO/usbmode/make_icon.py" connect "$STAGE/connect.png" --preview >/dev/null
 "$REMOTE" push "$STAGE/connect_x8.png" "/tmp/connect_x8.png"
-"$REMOTE" run "mkdir -p '$NATIVE' && cp -f '$APPS/Connect.opk' '$NATIVE/Connect.opk' && mv -f /tmp/connect_x8.png '$NATIVE/Connect.png' && sync"
+"$REMOTE" run "mkdir -p '$NATIVE' && mv -f /mnt/.Connect.opk.tmp '$NATIVE/Connect.opk' && rm -f '$APPS/Connect.opk' && mv -f /tmp/connect_x8.png '$NATIVE/Connect.png' && sync"
 if [ "$MODE" = "--refresh" ]; then
   "$REMOTE" run 'if pkill -x retrofe 2>/dev/null || pkill -x gmenu2x 2>/dev/null; then echo "menu restarted"; else echo "menu not running; entry appears next time it starts"; fi'
 else
-  echo "installed to Native games (RetroFE) and Applications (GMenu2X). Re-run with --refresh, or reopen the menu."
+  echo "installed to Native games (shown in RetroFE -> Native games and GMenu2X -> Applications). Re-run with --refresh, or reopen the menu."
 fi
 echo "The apps it replaces are still there: --retire-old parks them."

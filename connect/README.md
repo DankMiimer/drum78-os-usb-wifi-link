@@ -2,7 +2,9 @@
 
 **One app instead of four.** Connect puts [Wi-Fi](../wifi/README.md),
 [USB Link](../usblink/README.md) and the [USB Mode](../usbmode/README.md) switch
-behind a single entry in **Native games** (RetroFE) / **Applications** (GMenu2X)
+behind a single entry in **Native games** (RetroFE) / **Applications** (GMenu2X —
+GMenu2X scans the whole SD card by `Categories=applications;`, so keep `Connect.opk`
+only in `/mnt/Native games/` to avoid duplicate entries)
 (for **RG Nano**, **FunKey S**, and **GBA Mini** running DrUm78's FunKey-OS builds), and adds the USB Link
 settings that used to need a file edited on the PC. On the GBA Mini it draws
 inside its 240×160 visible screen area and hides the Wi-Fi row on

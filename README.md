@@ -9,9 +9,7 @@ Requires [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS) (tested on bu
 ### 1. Install `Connect.opk`
 
 1. Download **`Connect.opk`** from the [latest release](https://github.com/DankMiimer/drum78-os-usb-wifi-link/releases/latest).
-2. Connect your handheld to your PC in **Mount USB** mode and copy `Connect.opk`:
-   - into **`Native games`** on the SD card if you use **RetroFE** (FunKey-OS default frontend), and/or
-   - into **`Applications`** if you use **GMenu2X (`gxmenu`)**.
+2. Connect your handheld to your PC in **Mount USB** mode and copy `Connect.opk` into the **`Native games`** folder on the SD card *(do not also keep a copy in `Applications`, or GMenu2X will list it twice)*.
 3. Eject safely, reopen the menu (or reboot), and launch **Native games → Connect** (RetroFE) or **Applications → Connect** (GMenu2X).
 
 ### 2. Get online over USB (Windows or Linux PC)
