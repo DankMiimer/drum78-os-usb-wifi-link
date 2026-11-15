@@ -14,7 +14,7 @@ what those do, the settings files and the limits. Like them it works on the
 stock firmware and changes nothing on the system partition. The Wi-Fi part only
 loads into the kernel it was checked against (see [Safety](../wifi/README.md#safety)).
 
-> **Status:** built, tested offline (75 unit tests across Connect, Achievements, and Wi-Fi), and verified on RG Nano and GBA Mini. FunKey S support follows the same `funkey-s` / `240×240` FunKey-OS layout and is tested offline.
+> **Status:** built, tested offline (76 unit tests across Connect, Achievements, and Wi-Fi), and verified on RG Nano and GBA Mini. FunKey S support follows the same `funkey-s` / `240×240` FunKey-OS layout and is tested offline.
 
 ## The screens
 
@@ -100,6 +100,7 @@ of them makes sense.
 - [`app/usb_backend.py`](app/usb_backend.py): reads the USB state, edits
   `usblink.conf`, runs `usblink.sh` and `usbmode.sh`.
 - [`run.sh`](run.sh): the launcher. Errors go to `FunKey/connect.log`.
-- [`../tests/test_connect.py`](../tests/test_connect.py): offline tests with a
+- [`../picoarch/README.md`](../picoarch/README.md): bundled `rcheevos`-patched `/usr/games/picoarch` binary & source patch for in-game offline RetroAchievements (optional toggle under **Achievements → Game Patch**, backing up stock `picoarch.orig`).
+- [`../tests/test_connect.py`](../tests/test_connect.py) & [`../tests/test_ra_sync.py`](../tests/test_ra_sync.py): offline tests with a
   stand-in USB port and scripted button presses. `CONNECT_SHOTS=<dir>` saves the
   screens they draw as PNGs.

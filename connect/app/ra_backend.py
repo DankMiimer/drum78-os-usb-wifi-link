@@ -14,7 +14,9 @@ import email.utils
 import hashlib
 import json
 import os
+import shutil
 import socket
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -816,6 +818,7 @@ def status_summary() -> dict:
     clk = ra_clock.read_clock_sync()
     hist = _read_json(history_path(), default=[])
     hist_cnt = len(hist) if isinstance(hist, list) else 0
+    pico = picoarch_status()
     return {
         "logged_in": auth is not None,
         "user": auth.get("User", "") if auth else "",
@@ -831,7 +834,182 @@ def status_summary() -> dict:
         "last_error": str(meta.get("last_error") or ""),
         "clock_synced": bool(clk.get("last_sync_utc")),
         "tz": ra_clock.read_configured_tz(),
+        "picoarch_state": pico["state"],
+        "picoarch_backup": pico["has_backup"],
     }
+
+
+def emulator_dst_path() -> str:
+    return os.environ.get("RA_PICOARCH_DST", "/usr/games/picoarch")
+
+
+def emulator_backup_path() -> str:
+    return os.environ.get("RA_PICOARCH_BAK", "/usr/games/picoarch.orig")
+
+
+def bundled_picoarch_path() -> str:
+    env = os.environ.get("RA_PICOARCH_SRC")
+    if env is not None:
+        return env if os.path.isfile(env) else ""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    for cand in (
+        os.path.join(app_dir, "..", "ra", "picoarch"),
+        os.path.join(app_dir, "..", "..", "picoarch", "bin", "picoarch"),
+    ):
+        if os.path.isfile(cand):
+            return cand
+    return ""
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _binary_has_ra(path: str) -> bool:
+    """Return True if an ELF binary contains the /mnt/FunKey/raoffline hook path."""
+    needle = b"/mnt/FunKey/raoffline"
+    overlap = len(needle) - 1
+    prev = b""
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    return False
+                if needle in (prev + chunk):
+                    return True
+                prev = chunk[-overlap:]
+    except OSError:
+        return False
+
+
+def _should_remount_root() -> bool:
+    flag = os.environ.get("RA_PICOARCH_REMOUNT")
+    if flag is not None:
+        return flag != "0"
+    return emulator_dst_path().startswith("/usr/")
+
+
+def _remount_root(rw: bool) -> None:
+    if not _should_remount_root():
+        return
+    opt = "remount,rw" if rw else "remount,ro"
+    res = subprocess.run(
+        ["mount", "-o", opt, "/"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if res.returncode != 0 and rw:
+        detail = (res.stderr or res.stdout or f"exit {res.returncode}").strip()
+        raise ApiError(f"Could not mount / writable: {detail}")
+
+
+def _copy_atomic_exec(src: str, dst: str) -> None:
+    tmp = f"{dst}.tmp.{os.getpid()}"
+    try:
+        shutil.copyfile(src, tmp)
+        os.chmod(tmp, 0o755)
+        with open(tmp, "rb") as f:
+            os.fsync(f.fileno())
+        os.replace(tmp, dst)
+        if hasattr(os, "sync"):
+            os.sync()
+    except OSError as exc:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        raise ApiError(f"Failed writing {dst}: {exc}") from exc
+
+
+def picoarch_status() -> dict:
+    """Inspect whether /usr/games/picoarch has offline RetroAchievements support."""
+    dst = emulator_dst_path()
+    bak = emulator_backup_path()
+    bundled = bundled_picoarch_path()
+    dst_exists = os.path.isfile(dst)
+    has_backup = os.path.isfile(bak)
+    installed_ra = _binary_has_ra(dst) if dst_exists else False
+    up_to_date = False
+    if installed_ra and bundled:
+        try:
+            up_to_date = _sha256_file(dst) == _sha256_file(bundled)
+        except OSError:
+            up_to_date = False
+    if not dst_exists:
+        state = "missing"
+    elif installed_ra:
+        state = "update" if (bundled and not up_to_date) else "active"
+    else:
+        state = "stock"
+    return {
+        "state": state,
+        "dst": dst,
+        "bak": bak,
+        "bundled": bundled,
+        "dst_exists": dst_exists,
+        "has_backup": has_backup,
+        "installed_ra": installed_ra,
+        "up_to_date": up_to_date,
+    }
+
+
+def install_picoarch() -> dict:
+    """Back up stock picoarch (if needed) and atomically install the RA build."""
+    src = bundled_picoarch_path()
+    if not src:
+        raise ApiError("No bundled picoarch binary found inside Connect.")
+    try:
+        with open(src, "rb") as f:
+            magic = f.read(4)
+    except OSError as exc:
+        raise ApiError(f"Cannot read bundled picoarch: {exc}") from exc
+    if magic != b"\x7fELF":
+        raise ApiError("Bundled picoarch is not a valid ELF executable.")
+    expected_sha = _sha256_file(src)
+    dst = emulator_dst_path()
+    bak = emulator_backup_path()
+    backed_up = False
+    _remount_root(True)
+    try:
+        if os.path.isfile(dst) and not os.path.exists(bak) and not _binary_has_ra(dst):
+            _copy_atomic_exec(dst, bak)
+            backed_up = True
+        _copy_atomic_exec(src, dst)
+    finally:
+        try:
+            _remount_root(False)
+        except Exception:
+            pass
+    if _sha256_file(dst) != expected_sha:
+        raise ApiError("Installed picoarch verification failed (SHA-256 mismatch).")
+    return {"backed_up": backed_up or os.path.isfile(bak), "sha256": expected_sha}
+
+
+def restore_picoarch() -> dict:
+    """Restore the backed-up stock binary from /usr/games/picoarch.orig."""
+    dst = emulator_dst_path()
+    bak = emulator_backup_path()
+    if not os.path.isfile(bak):
+        raise ApiError("No stock backup found at picoarch.orig.")
+    _remount_root(True)
+    try:
+        _copy_atomic_exec(bak, dst)
+    finally:
+        try:
+            _remount_root(False)
+        except Exception:
+            pass
+    return {"restored": True}
 
 
 def hub_tag() -> str:
@@ -839,6 +1017,9 @@ def hub_tag() -> str:
     pending = list_pending_awards()
     if pending:
         return f"{len(pending)} pending"
+    pico = picoarch_status()
+    if pico["state"] == "stock" and pico["bundled"]:
+        return "setup"
     if get_auth() is not None:
         return "ready"
     return "sign in"

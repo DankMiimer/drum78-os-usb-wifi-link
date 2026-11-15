@@ -74,6 +74,13 @@ sed 's/\r$//' "$REPO/wifi/kernel/kernels" > "$STAGE/kernels"
 for f in "$REPO/wifi/app/"*.py "$HERE/app/"*.py; do
   sed 's/\r$//' "$f" > "$STAGE/app/$(basename "$f")"
 done
+if [ -f "$REPO/picoarch/bin/picoarch" ]; then
+  mkdir -p "$STAGE/ra"
+  cp "$REPO/picoarch/bin/picoarch" "$STAGE/ra/picoarch"
+  chmod +x "$STAGE/ra/picoarch"
+  [ -f "$REPO/picoarch/bin/picoarch.sha256" ] && cp "$REPO/picoarch/bin/picoarch.sha256" "$STAGE/ra/picoarch.sha256"
+  echo "with in-game RA picoarch from $REPO/picoarch/bin/picoarch"
+fi
 python3 "$REPO/usbmode/make_icon.py" connect "$STAGE/connect.png" >/dev/null
 
 # Handheld Link (file sharing between handhelds, from the handheld-usb-link

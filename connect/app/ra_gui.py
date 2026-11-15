@@ -8,7 +8,7 @@ import time
 import ra_backend
 import ra_clock
 
-MAX_COLS = 30
+MAX_COLS = 28
 MAX_LINES = 6
 
 
@@ -337,14 +337,83 @@ def _do_scan(g):
     g.message(title, _wrap(lines))
 
 
+def _picoarch_label(state: str) -> str:
+    return {
+        "active": "active",
+        "update": "update",
+        "stock": "install",
+        "missing": "missing",
+    }.get(state, state or "unknown")
+
+
+def _game_patch_menu(g):
+    while True:
+        pico = ra_backend.picoarch_status()
+        state = pico["state"]
+        has_bak = pico["has_backup"]
+        has_bin = bool(pico["bundled"])
+        items = []
+        actions = []
+        if has_bin:
+            if state == "stock":
+                items.append(("Enable In-Game RA", "install"))
+            elif state == "update":
+                items.append(("Update In-Game RA", "update"))
+            else:
+                items.append(("Reinstall In-Game RA", "active"))
+            actions.append("install")
+        if has_bak:
+            items.append(("Restore Stock", "orig"))
+            actions.append("restore")
+        items.append(("Back", ""))
+        actions.append("back")
+        c = g.menu("Game Patch", items, status=_picoarch_label(state))
+        if c in (None, len(items) - 1):
+            return None
+        if c == "QUIT":
+            return "QUIT"
+        act = actions[c]
+        if act == "install":
+            msg = [
+                "Replaces /usr/games/picoarch",
+                "to track unlocks offline.",
+                "Stock is kept as .orig.",
+            ]
+            if g.confirm("Enable In-Game RA?", _wrap(msg)):
+                g.busy("Game Patch", ["Installing picoarch...", "(syncing rootfs)"])
+                try:
+                    ra_backend.install_picoarch()
+                    g.message("In-Game RA Ready", _wrap([
+                        "Patched picoarch installed.",
+                        "RetroAchievements will now",
+                        "track offline in games.",
+                    ]))
+                except ra_backend.ApiError as exc:
+                    g.message("Install Failed", _wrap([str(exc)]))
+        elif act == "restore":
+            if g.confirm("Restore Stock?", _wrap([
+                "Restore /usr/games/",
+                "picoarch.orig?",
+                "Disables in-game RA.",
+            ])):
+                g.busy("Game Patch", ["Restoring stock...", "(syncing rootfs)"])
+                try:
+                    ra_backend.restore_picoarch()
+                    g.message("Stock Restored", _wrap(["Original picoarch active."]))
+                except ra_backend.ApiError as exc:
+                    g.message("Restore Failed", _wrap([str(exc)]))
+
+
 def _show_status(g):
     st = ra_backend.status_summary()
+    pstate = _picoarch_label(st.get("picoarch_state", ""))
+    clk = "ok" if st["clock_synced"] else "no"
     lines = [
         f"User: {st['user']}" if st["logged_in"] else "User: not signed in",
         f"Points: {st['score']} (soft {st['score_casual']})",
         f"Pending: {st['pending_count']}  Sets: {st['cached_sets']}",
         f"ROMs: {st['roms_matched']}/{st['roms_indexed']} matched",
-        f"Clock: {'synced' if st['clock_synced'] else 'no sync'} ({st['tz'] or 'no TZ'})",
+        f"Game: {pstate}  Clock: {clk}",
     ]
     if st.get("last_error"):
         lines.append(f"Err: {st['last_error']}")
@@ -357,6 +426,7 @@ def ra_menu(g):
         st = ra_backend.status_summary()
         pend = st["pending_count"]
         hcnt = st.get("history_count", 0)
+        pstate = st.get("picoarch_state", "")
         items = [
             ("Sync Now", f"{pend} up" if pend else "run"),
             ("Pending Queue", str(pend)),
@@ -364,6 +434,7 @@ def ra_menu(g):
             ("Account", st["user"][:10] if st["logged_in"] else "sign in"),
             ("Status", ""),
             ("History", str(hcnt) if hcnt else ""),
+            ("Game Patch", _picoarch_label(pstate)),
             ("Back", ""),
         ]
         c = g.menu("Achievements", items, sel=sel)
@@ -385,5 +456,7 @@ def ra_menu(g):
             _show_status(g)
         elif c == 5:
             res = _history_menu(g)
+        elif c == 6:
+            res = _game_patch_menu(g)
         if res == "QUIT":
             return "QUIT"

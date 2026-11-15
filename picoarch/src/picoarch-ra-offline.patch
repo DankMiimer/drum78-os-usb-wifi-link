@@ -1,0 +1,456 @@
+diff --git a/Makefile b/Makefile
+index beef506..35e1144 100644
+--- a/Makefile
++++ b/Makefile
+@@ -7,13 +7,22 @@ SYSROOT   = $(shell $(CC) --print-sysroot)
+ 
+ PROCS     = -j4
+ 
+-SOURCES   = libpicofe/input.c libpicofe/in_sdl.c libpicofe/linux/in_evdev.c libpicofe/linux/plat.c libpicofe/fonts.c libpicofe/readpng.c libpicofe/config_file.c cheat.c config.c content.c core.c menu.c main.c options.c overrides.c patch.c scale.c unzip.c util.c video.c
++RC_DIR     = ../rcheevos/src
++RC_SOURCES = $(RC_DIR)/libretro/rc_libretro.c \
++             $(RC_DIR)/api/rc_api_common.c $(RC_DIR)/api/rc_api_editor.c $(RC_DIR)/api/rc_api_info.c $(RC_DIR)/api/rc_api_runtime.c $(RC_DIR)/api/rc_api_user.c \
++             $(RC_DIR)/client/rc_client.c $(RC_DIR)/client/rc_client_async.c $(RC_DIR)/client/rc_client_do_frame.c $(RC_DIR)/client/rc_client_external.c $(RC_DIR)/client/rc_client_game.c $(RC_DIR)/client/rc_client_info.c $(RC_DIR)/client/rc_client_load.c $(RC_DIR)/client/rc_client_raintegration.c $(RC_DIR)/client/rc_client_server.c $(RC_DIR)/client/rc_client_user.c \
++             $(RC_DIR)/hash/rc_cdreader.c $(RC_DIR)/hash/rc_hash.c $(RC_DIR)/hash/rc_hash_disc.c $(RC_DIR)/hash/rc_hash_encrypted.c $(RC_DIR)/hash/aes.c $(RC_DIR)/hash/rc_hash_rom.c $(RC_DIR)/hash/rc_hash_zip.c \
++             $(RC_DIR)/runtime/rc_alloc.c $(RC_DIR)/runtime/rc_condition.c $(RC_DIR)/runtime/rc_condset.c $(RC_DIR)/runtime/rc_consoleinfo.c $(RC_DIR)/runtime/rc_format.c $(RC_DIR)/runtime/rc_lboard.c $(RC_DIR)/runtime/rc_memref.c $(RC_DIR)/runtime/rc_operand.c $(RC_DIR)/runtime/rc_richpresence.c $(RC_DIR)/runtime/rc_runtime.c $(RC_DIR)/runtime/rc_runtime_progress.c $(RC_DIR)/runtime/rc_trigger.c $(RC_DIR)/runtime/rc_typed_value.c $(RC_DIR)/runtime/rc_value.c \
++             $(RC_DIR)/util/md5.c $(RC_DIR)/util/rc_compat.c $(RC_DIR)/util/rc_util.c $(RC_DIR)/util/rc_version.c
++
++SOURCES   = libpicofe/input.c libpicofe/in_sdl.c libpicofe/linux/in_evdev.c libpicofe/linux/plat.c libpicofe/fonts.c libpicofe/readpng.c libpicofe/config_file.c cheat.c config.c content.c core.c menu.c main.c options.c overrides.c patch.c ra_offline.c scale.c unzip.c util.c video.c $(RC_SOURCES)
+ 
+ BIN       = picoarch
+ 
+ unexport CFLAGS
+ CFLAGS     += -Wall
+ CFLAGS     += -fdata-sections -ffunction-sections -DPICO_HOME_DIR='"/.picoarch/"' -flto
++CFLAGS     += -DRC_NO_THREADS -DRC_CLIENT_SUPPORTS_HASH -I../rcheevos/include -I../rcheevos/src/libretro
+ CFLAGS     += -I./ -I./libretro-common/include/ $(shell $(SYSROOT)/usr/bin/sdl-config --cflags)
+ 
+ # Revision info from repository
+diff --git a/core.c b/core.c
+index 7ac0dde..7adcf55 100644
+--- a/core.c
++++ b/core.c
+@@ -14,6 +14,7 @@
+ #include "options.h"
+ #include "overrides.h"
+ #include "plat.h"
++#include "ra_offline.h"
+ #include "util.h"
+ #include "video.h"
+ #include <sys/time.h>
+@@ -252,6 +253,7 @@ int state_read(void) {
+ 		goto error;
+ 	}
+ 
++	ra_offline_load_state(filename);
+ 	ret = 0;
+ error:
+ 	if (state)
+@@ -297,6 +299,7 @@ int state_write(void) {
+ 	}
+ 
+ 	plat_dump_screen(filename);
++	ra_offline_save_state(filename);
+ 
+ 	ret = 0;
+ error:
+@@ -510,6 +513,15 @@ static bool pa_environment(unsigned cmd, void *data) {
+ 			*out = save_dir;
+ 		break;
+ 	}
++	case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: { /* 36 | EXP */
++		ra_offline_set_memory_maps((const struct retro_memory_map *)data);
++		break;
++	}
++	case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS: { /* 42 | EXP */
++		const bool *supported = (const bool *)data;
++		ra_offline_set_support_achievements(supported ? *supported : true);
++		break;
++	}
+ 	case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS: { /* 52 */
+ 		bool *out = (bool *)data;
+ 		if (out)
+@@ -786,6 +798,13 @@ int core_load_content(struct content *content) {
+ 
+ 	video_set_geometry(&av_info.geometry);
+ 	plat_reinit();
++#ifdef FUNKEY_S
++	ra_offline_defer_game_load(content->path, content->tmpfile,
++	                           content->data, content->size, core_name);
++#else
++	ra_offline_on_game_load(content->path, content->tmpfile,
++	                        content->data, content->size, core_name);
++#endif
+ 
+ #ifdef MMENU
+ 	content_based_name(content, save_template_path, MAX_PATH, save_dir, NULL, ".st%i");
+@@ -860,6 +879,7 @@ void core_run_frame(void) {
+ }
+ 
+ void core_unload_content(void) {
++	ra_offline_on_game_unload();
+ 	sram_write();
+ 	rtc_write();
+ 
+diff --git a/libpicofe b/libpicofe
+--- a/libpicofe
++++ b/libpicofe
+@@ -1 +1 @@
+-Subproject commit 76e45c3489a0c32d91744413c198f685b553f6c0
++Subproject commit 76e45c3489a0c32d91744413c198f685b553f6c0-dirty
+diff --git a/main.c b/main.c
+index 06862ca..e0fcfaa 100644
+--- a/main.c
++++ b/main.c
+@@ -12,6 +12,8 @@
+ #include "menu.h"
+ #include "overrides.h"
+ #include "plat.h"
++#include "ra_offline.h"
++#include "unzip.h"
+ #include "util.h"
+ 
+ #ifdef MMENU
+@@ -655,6 +657,7 @@ static void adjust_audio(void) {
+ int state_resume(void) {
+ 	int ret = 0;
+ 
++	ra_offline_commit_deferred_load();
+ 	if (resume_slot != -1) {
+ 		state_slot = resume_slot;
+ 		ret = state_read();
+@@ -663,6 +666,28 @@ int state_resume(void) {
+ 	return ret;
+ }
+ 
++static void *pa_get_mem_data(unsigned id)
++{
++	return current_core.retro_get_memory_data ? current_core.retro_get_memory_data(id) : NULL;
++}
++
++static size_t pa_get_mem_size(unsigned id)
++{
++	return current_core.retro_get_memory_size ? current_core.retro_get_memory_size(id) : 0;
++}
++
++static int pa_unzip_to_tmp(const char *zip_path, char *out_tmp, size_t out_len)
++{
++	FILE *f = fopen(zip_path, "rb");
++	const char **exts = core_extensions();
++	int ret;
++	if (!f)
++		return -1;
++	ret = unzip_tmp(f, exts, out_tmp, out_len);
++	fclose(f);
++	return ret;
++}
++
+ int main(int argc, char **argv) {
+ 	char content_path[MAX_PATH];
+ 	const struct core_override *override;
+@@ -727,6 +752,16 @@ int main(int argc, char **argv) {
+ 	}
+ #endif
+ 
++	{
++		struct ra_offline_host ra_host = {
++			pa_get_mem_data,
++			pa_get_mem_size,
++			plat_video_set_ra_toast,
++			pa_unzip_to_tmp
++		};
++		ra_offline_init_host(&ra_host);
++	}
++
+ 	if (core_load_content(content)) {
+ 		quit(-1);
+ 	}
+@@ -760,11 +795,13 @@ int main(int argc, char **argv) {
+ 	FK_Resume();
+ 	FK_InitInstantPlay(argc, argv);
+ #endif
++	ra_offline_commit_deferred_load();
+ 
+ 	do {
+ 		count_fps();
+ 		adjust_audio();
+ 		core_run_frame();
++		ra_offline_do_frame();
+ 		perform_emu_action();
+ #ifdef FUNKEY_S
+ 		if (should_suspend) {
+diff --git a/menu.c b/menu.c
+index b5d8491..7a0fb07 100644
+--- a/menu.c
++++ b/menu.c
+@@ -5,6 +5,7 @@
+ #include "options.h"
+ #include "overrides.h"
+ #include "plat.h"
++#include "ra_offline.h"
+ #include "scale.h"
+ #include "util.h"
+ 
+@@ -35,6 +36,7 @@ typedef enum
+ 	MA_MAIN_LOAD_STATE,
+ 	MA_MAIN_DISC_CTRL,
+ 	MA_MAIN_CHEATS,
++	MA_MAIN_ACHIEVEMENTS,
+ 	MA_MAIN_CORE_SEL,
+ 	MA_MAIN_CONTENT_SEL,
+ 	MA_MAIN_RESET_GAME,
+@@ -902,6 +904,7 @@ static int main_menu_handler(int id, int keys)
+ 		return menu_loop_savestate(1);
+ 	case MA_MAIN_RESET_GAME:
+ 		current_core.retro_reset();
++		ra_offline_reset();
+ 		return 1;
+ 	case MA_MAIN_CREDITS:
+ 		draw_menu_message(credits, draw_frame_credits);
+@@ -918,14 +921,69 @@ static int main_menu_handler(int id, int keys)
+ 	return 0;
+ }
+ 
++static int menu_loop_ra_page(int id, int keys)
++{
++	static menu_entry ra_entries[MENU_ITEMS_PER_PAGE + 1];
++	static char ra_status[64];
++	static char ra_lines[MENU_ITEMS_PER_PAGE][64];
++	int start = (id >= 1000) ? (id - 1000) : 0;
++	int total = ra_offline_get_achievement_count();
++	int max_items = MENU_ITEMS_PER_PAGE - 3;
++	int idx = 0;
++	int sel = 1;
++
++	memset(ra_entries, 0, sizeof(ra_entries));
++	ra_offline_get_status(ra_status, sizeof(ra_status));
++	string_truncate(ra_status, 34);
++
++	ra_entries[idx].name = ra_status;
++	ra_entries[idx].beh = MB_NONE;
++	ra_entries[idx].enabled = 1;
++	ra_entries[idx].selectable = (total == 0);
++	idx++;
++
++	int i;
++	for (i = start; i < total && (i - start) < max_items; i++, idx++) {
++		ra_offline_format_achievement(i, ra_lines[idx], sizeof(ra_lines[idx]));
++		string_truncate(ra_lines[idx], 34);
++		ra_entries[idx].name = ra_lines[idx];
++		ra_entries[idx].beh = MB_NONE;
++		ra_entries[idx].enabled = 1;
++		ra_entries[idx].selectable = 1;
++	}
++
++	if (total == 0)
++		sel = 0;
++
++	if (i < total) {
++		ra_entries[idx].name = "Next page";
++		ra_entries[idx].beh = MB_OPT_CUSTOM;
++		ra_entries[idx].id = 1000 + i;
++		ra_entries[idx].enabled = 1;
++		ra_entries[idx].selectable = 1;
++		ra_entries[idx].handler = menu_loop_ra_page;
++	}
++
++	me_loop(ra_entries, &sel);
++	return 0;
++}
++
++static int menu_loop_ra(int id, int keys)
++{
++	(void)id;
++	(void)keys;
++	return menu_loop_ra_page(1000, 0);
++}
++
+ static menu_entry e_menu_main[] =
+ {
+-	mee_handler_id("Resume game",        MA_MAIN_RESUME_GAME, main_menu_handler),
+-	mee_handler_id("Save state",         MA_MAIN_SAVE_STATE,  main_menu_handler),
+-	mee_handler_id("Load state",         MA_MAIN_LOAD_STATE,  main_menu_handler),
+-	mee_handler_id("Disc control",       MA_MAIN_DISC_CTRL,   menu_loop_disc),
+-	mee_handler_id("Cheats",             MA_MAIN_CHEATS,      menu_loop_cheats),
+-	mee_handler   ("Options",                                 menu_loop_options),
++	mee_handler_id("Resume game",        MA_MAIN_RESUME_GAME,  main_menu_handler),
++	mee_handler_id("Save state",         MA_MAIN_SAVE_STATE,   main_menu_handler),
++	mee_handler_id("Load state",         MA_MAIN_LOAD_STATE,   main_menu_handler),
++	mee_handler_id("Disc control",       MA_MAIN_DISC_CTRL,    menu_loop_disc),
++	mee_handler_id("Cheats",             MA_MAIN_CHEATS,       menu_loop_cheats),
++	mee_handler_id("RetroAchievements",  MA_MAIN_ACHIEVEMENTS, menu_loop_ra),
++	mee_handler   ("Options",                                  menu_loop_options),
+ 	mee_handler_id("Reset game",         MA_MAIN_RESET_GAME,  main_menu_handler),
+ 	mee_handler_id("Load new game",      MA_MAIN_CONTENT_SEL, menu_loop_select_content),
+ 	mee_handler_id("About",              MA_MAIN_CREDITS,     main_menu_handler),
+diff --git a/plat.h b/plat.h
+index 52e7652..db8dbf3 100644
+--- a/plat.h
++++ b/plat.h
+@@ -19,6 +19,7 @@ int plat_load_screen(const char *filename, void *buf, size_t buf_size, int *w, i
+ 
+ void plat_video_open(void);
+ void plat_video_set_msg(const char *new_msg, unsigned priority, unsigned msec);
++void plat_video_set_ra_toast(const char *line1, const char *line2, unsigned msec);
+ void plat_video_process(const void *data, unsigned width, unsigned height, size_t pitch);
+ void plat_video_flip(void);
+ void plat_video_close(void);
+diff --git a/plat_sdl.c b/plat_sdl.c
+index 398cf1f..a746bc1 100644
+--- a/plat_sdl.c
++++ b/plat_sdl.c
+@@ -6,6 +6,7 @@
+ #include "libpicofe/plat.h"
+ #include "menu.h"
+ #include "plat.h"
++#include "ra_toast_osd.h"
+ #include "scale.h"
+ #include "util.h"
+ 
+@@ -36,9 +37,43 @@ static char msg[HUD_LEN];
+ static unsigned msg_priority = 0;
+ static unsigned msg_expire = 0;
+ 
++static char ra_toast1[64];
++static char ra_toast2[64];
++static unsigned ra_toast_start = 0;
++static unsigned ra_toast_expire = 0;
++static int had_ra_toast = 0;
++static int ra_toast_drawn = 0;
++
+ static bool frame_dirty = false;
+ static int frame_time = 1000000 / 60;
+ 
++static int is_gba_mini(void)
++{
++	static int cached = -1;
++	if (cached >= 0)
++		return cached;
++
++	const char *env = getenv("NANO_GBA_MINI");
++	if (env && env[0] == '1') {
++		cached = 1;
++		return cached;
++	}
++
++	FILE *f = fopen("/etc/fkgpiod.conf", "r");
++	cached = 0;
++	if (f) {
++		char buf[256];
++		while (fgets(buf, sizeof(buf), f)) {
++			if (strstr(buf, "START+A")) {
++				cached = 1;
++				break;
++			}
++		}
++		fclose(f);
++	}
++	return cached;
++}
++
+ static uint64_t plat_get_ticks_us_u64(void) {
+ 	uint64_t ret;
+ 	struct timeval tv;
+@@ -66,12 +101,29 @@ static void video_update_msg(void)
+ 
+ static void video_clear_msg(uint16_t *dst, uint32_t h, uint32_t pitch)
+ {
+-	memset(dst + (h - 10) * pitch, 0, 10 * pitch * sizeof(uint16_t));
++	uint32_t eh = (is_gba_mini() && h > 208) ? 208 : h;
++	memset(dst + (eh - 10) * pitch, 0, 10 * pitch * sizeof(uint16_t));
+ }
+ 
+ static void video_print_msg(uint16_t *dst, uint32_t h, uint32_t pitch, char *msg)
+ {
+-	basic_text_out16_nf(dst, pitch, 2, h - 10, msg);
++	uint32_t eh = (is_gba_mini() && h > 208) ? 208 : h;
++	basic_text_out16_nf(dst, pitch, 2, eh - 10, msg);
++}
++
++static void video_clear_ra_toast(uint16_t *dst, uint32_t h, uint32_t pitch)
++{
++	ra_toast_clear_box(dst, h, pitch, is_gba_mini());
++}
++
++static void video_draw_ra_toast(uint16_t *dst, uint32_t w, uint32_t h, uint32_t pitch)
++{
++	if (!ra_toast1[0] && !ra_toast2[0])
++		return;
++	unsigned now = plat_get_ticks_ms();
++	unsigned elapsed = (now >= ra_toast_start) ? (now - ra_toast_start) : RA_TOAST_IN_MS;
++	unsigned remain = (ra_toast_expire > now) ? (ra_toast_expire - now) : 0;
++	ra_toast_draw(dst, w, h, pitch, is_gba_mini(), ra_toast1, ra_toast2, elapsed, remain);
+ }
+ 
+ static int audio_resample_passthrough(struct audio_frame data) {
+@@ -232,15 +284,35 @@ void plat_video_set_msg(const char *new_msg, unsigned priority, unsigned msec)
+ 	}
+ }
+ 
++void plat_video_set_ra_toast(const char *line1, const char *line2, unsigned msec)
++{
++	if (!line1 && !line2) {
++		ra_toast1[0] = '\0';
++		ra_toast2[0] = '\0';
++		ra_toast_start = 0;
++		ra_toast_expire = 0;
++		return;
++	}
++	snprintf(ra_toast1, sizeof(ra_toast1), "%s", line1 ? line1 : "");
++	snprintf(ra_toast2, sizeof(ra_toast2), "%s", line2 ? line2 : "");
++	ra_toast_start = plat_get_ticks_ms();
++	ra_toast_expire = ra_toast_start + msec;
++}
++
+ void plat_video_process(const void *data, unsigned width, unsigned height, size_t pitch) {
+ 	static int had_msg = 0;
+ 	frame_dirty = true;
++	ra_toast_drawn = 0;
+ 	SDL_LockSurface(screen);
+ 
+ 	if (had_msg) {
+ 		video_clear_msg(screen->pixels, screen->h, screen->pitch / SCREEN_BPP);
+ 		had_msg = 0;
+ 	}
++	if (had_ra_toast) {
++		video_clear_ra_toast(screen->pixels, screen->h, screen->pitch / SCREEN_BPP);
++		had_ra_toast = 0;
++	}
+ 
+ 	scale(width, height, pitch, data, screen->pixels);
+ 
+@@ -248,10 +320,20 @@ void plat_video_process(const void *data, unsigned width, unsigned height, size_
+ 		video_print_msg(screen->pixels, screen->h, screen->pitch / SCREEN_BPP, msg);
+ 		had_msg = 1;
+ 	}
++	if (ra_toast1[0] || ra_toast2[0]) {
++		video_draw_ra_toast(screen->pixels, screen->w, screen->h, screen->pitch / SCREEN_BPP);
++		had_ra_toast = 1;
++		ra_toast_drawn = 1;
++	}
+ 
+ 	SDL_UnlockSurface(screen);
+ 
+ 	video_update_msg();
++	if ((ra_toast1[0] || ra_toast2[0]) && ra_toast_expire < plat_get_ticks_ms()) {
++		ra_toast1[0] = '\0';
++		ra_toast2[0] = '\0';
++		ra_toast_expire = 0;
++	}
+ }
+ 
+ void plat_video_flip(void)
+@@ -259,6 +341,13 @@ void plat_video_flip(void)
+ 	static uint64_t next_frame_time_us = 0;
+ 
+ 	if (frame_dirty) {
++		if ((ra_toast1[0] || ra_toast2[0]) && !ra_toast_drawn && screen) {
++			SDL_LockSurface(screen);
++			video_draw_ra_toast(screen->pixels, screen->w, screen->h, screen->pitch / SCREEN_BPP);
++			had_ra_toast = 1;
++			ra_toast_drawn = 1;
++			SDL_UnlockSurface(screen);
++		}
+ 		if (enable_drc) {
+ 			uint64_t time = plat_get_ticks_us_u64();
+ 

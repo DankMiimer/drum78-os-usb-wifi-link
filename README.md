@@ -1,6 +1,6 @@
 # Drum78's OS USB & WiFi Link
 
-One app (**Connect**) to get your **RG Nano**, **GBA Mini**, or **FunKey S** online over USB or a Wi-Fi dongle, share files between handhelds, and switch USB modes — without touching system files or editing config files by hand.
+One app (**Connect**) to get your **RG Nano**, **GBA Mini**, or **FunKey S** online over USB or a Wi-Fi dongle, **sync offline RetroAchievements**, share files between handhelds, and switch USB modes — without touching system files or editing config files by hand.
 
 Requires [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS) (tested on builds reporting `FunKey-OS 2.3.0`, kernel `4.14.14-funkey` from 2026-01-18).
 
@@ -26,12 +26,21 @@ Requires [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS) (tested on bu
 
 After setup, unplugging and replugging the cable reconnects automatically until the next reboot.
 
-### 3. Wi-Fi dongle, Achievements, Handheld Link & USB mode switching
+### 3. RetroAchievements, Wi-Fi dongle, Handheld Link & USB mode switching
 
+- **Offline RetroAchievements sync:** open **Connect → Achievements** to cache achievement sets for your ROMs while online, earn achievements on the go without Wi-Fi/USB, and upload queued unlocks later. See [RetroAchievements (offline play & sync)](#retroachievements-offline-play--sync) below.
 - **USB Wi-Fi Dongle (RG Nano only):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi Dongle** to scan and connect. **Only the RG Nano supports a USB Wi-Fi dongle** — in DrUm78's kernel source, only the RG Nano enables USB OTG/host mode (`dr_mode = "otg"`), while FunKey S, GBA Mini, and Q36 Mini are peripheral-only (`dr_mode = "peripheral"`), so Connect hides Wi-Fi Dongle on them automatically.
-- **Achievements (offline RetroAchievements sync):** open **Connect → Achievements** while online (Wi-Fi Dongle or USB internet) to sign in (or import `/mnt/FunKey/raoffline/login.txt`), run **Scan ROMs** to cache game and achievement metadata for your ROMs locally, and hit **Sync Now** anytime to upload offline-earned unlocks and view your **Pending Queue** and **History**.
 - **Handheld Link (0.4.0):** bundled inside **Connect → Handheld Link** for linking and sharing with another handheld (from [handheld-usb-link](https://github.com/DankMiimer/handheld-usb-link)). Connect automatically clears PC USB network settings/watchers for you on launch so transfers use the fast USB network link instead of falling back to ADB speed.
 - **Switch USB Mode:** open **Connect → USB → Mode** anytime to reboot between **USB Storage** (for copying ROMs/files as a drive) and **ADB mode** (for USB internet, SSH, and `nanoctl`).
+
+## RetroAchievements (offline play & sync)
+
+Play anywhere with **offline RetroAchievements** on **RG Nano**, **GBA Mini**, and **FunKey S**: enable in-game achievement tracking directly inside Connect, cache achievement sets while connected (via USB internet sharing or RG Nano Wi-Fi dongle), earn **softcore** achievements offline, and upload your queue next time you reconnect.
+
+1. **Enable In-Game Tracking (`Connect → Achievements → Game Patch`):** press **Enable In-Game RA** to install the bundled `rcheevos`-enabled `/usr/games/picoarch` right on the handheld (no PC needed). Stock `/usr/games/picoarch` is automatically backed up to `/usr/games/picoarch.orig`, and you can choose **Restore Stock** anytime. *(CLI alternative over ADB: `picoarch/install_picoarch.sh`; source patch & build details in [picoarch/README.md](picoarch/README.md)).*
+2. **Sign in (`Connect → Achievements → Account`):** sign in with the on-screen keyboard (`Sign In`), or put `user:pass` in `/mnt/FunKey/raoffline/login.txt` (or `/mnt/ra_login.txt`) and choose **Import login.txt** — Connect exchanges it for an API token in `/mnt/FunKey/raoffline/auth.json` and scrubs the plaintext file.
+3. **Cache ROM sets & prior unlocks (`Scan ROMs`):** pick **All Systems** or a single folder. Connect hashes ROMs in streaming 64 KB chunks (including `.zip` archives and `rcheevos`-compatible header stripping for NES/FDS, SNES, PC Engine, and Atari Lynx across Game Boy, GBC, GBA, NES, SNES, Genesis/32X, Master System/Game Gear, PC Engine, Lynx, Neo Geo Pocket, WonderSwan, Pokemon Mini, and PS1) and downloads achievement sets to `/mnt/FunKey/raoffline/cache/`.
+4. **Play offline & sync (`Sync Now`):** offline unlocks queue under `/mnt/FunKey/raoffline/queue/` and can be inspected in **Pending Queue** or **History**. Pressing **Sync Now** flushes queued unlocks, refreshes unlock caches/scores, calibrates `/mnt/FunKey/raoffline/clock_sync.json` (also updated automatically when connecting over Wi-Fi), and offers a one-tap USB reconnect retry if USB internet is disconnected. You can cancel long scans or syncs anytime with **B** without losing progress.
 
 ## Supported devices
 
@@ -178,10 +187,11 @@ PC sharing helpers support `-Status`, `-DryRun`, `-Yes`, `-Force`, and `-Configu
 
 ### Tests
 
-Offline unit tests (`test_connect.py`: 44 tests, `test_wifi_backend.py`: 13 tests):
+Offline unit tests (`test_connect.py`: 48 tests, `test_ra_sync.py`: 15 tests, `test_wifi_backend.py`: 13 tests):
 
 ```bash
 python3 tests/test_connect.py
+python3 tests/test_ra_sync.py
 python3 tests/test_wifi_backend.py
 ```
 

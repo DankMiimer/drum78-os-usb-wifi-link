@@ -52,7 +52,7 @@ def _utc(y, m, d, hh=0, mm=0, ss=0) -> int:
 class FakeKeys:
     queue: list[str] = []
 
-    def get(self):
+    def get(self, repeat: bool = True):
         if not self.queue:
             raise AssertionError("Scripted button queue exhausted")
         return self.queue.pop(0)
@@ -615,6 +615,51 @@ class GuiTests(unittest.TestCase):
                 g_prog.close()
         finally:
             wifi_gui.Buttons = old_btns
+
+    def test_picoarch_install_backup_and_restore(self):
+        with tempfile.TemporaryDirectory() as d:
+            dst = os.path.join(d, "picoarch")
+            bak = os.path.join(d, "picoarch.orig")
+            src = os.path.join(d, "bundled_picoarch")
+            stock_bytes = b"\x7fELFSTOCK_BINARY_ORIGINAL"
+            ra_bytes = b"\x7fELF" + b"\x00" * 16 + b"/mnt/FunKey/raoffline" + b"\x00" * 16
+            with open(dst, "wb") as f:
+                f.write(stock_bytes)
+            with open(src, "wb") as f:
+                f.write(ra_bytes)
+
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "0",
+            }):
+                st0 = ra_backend.picoarch_status()
+                self.assertEqual(st0["state"], "stock")
+                self.assertFalse(st0["has_backup"])
+
+                res = ra_backend.install_picoarch()
+                self.assertTrue(res["backed_up"])
+                st1 = ra_backend.picoarch_status()
+                self.assertEqual(st1["state"], "active")
+                self.assertTrue(st1["has_backup"])
+                with open(dst, "rb") as f:
+                    self.assertEqual(f.read(), ra_bytes)
+                with open(bak, "rb") as f:
+                    self.assertEqual(f.read(), stock_bytes)
+
+                # UI Game Patch flow: open Game Patch (index 6) -> Enable/Reinstall -> confirm -> dismiss -> Restore -> confirm -> dismiss -> Back -> Menu
+                g = self._run_ra(["down", "down", "down", "down", "down", "down", "a",
+                                  "a", "a", "a",
+                                  "down", "a", "a", "a",
+                                  "b", "menu"])
+                st2 = ra_backend.picoarch_status()
+                self.assertEqual(st2["state"], "stock")
+                with open(dst, "rb") as f:
+                    self.assertEqual(f.read(), stock_bytes)
+                msgs = [s[1] for s in g.seen if s[0] == "message"]
+                self.assertIn("In-Game RA Ready", msgs)
+                self.assertIn("Stock Restored", msgs)
 
 
 if __name__ == "__main__":
