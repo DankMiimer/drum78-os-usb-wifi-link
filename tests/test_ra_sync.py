@@ -385,6 +385,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(res1["unlocks_fetched"], 1)
         self.assertTrue(os.path.isfile(ra_backend.set_cache_path(md5_hex)))
         self.assertTrue(os.path.isfile(ra_backend.unlocks_cache_path(777)))
+        self.assertTrue(ra_backend.status_summary()["clock_synced"])
 
         # Second scan: already-cached sets & unlocks are skipped (0 network calls)
         self.srv.calls.clear()
@@ -648,18 +649,152 @@ class GuiTests(unittest.TestCase):
                 with open(bak, "rb") as f:
                     self.assertEqual(f.read(), stock_bytes)
 
-                # UI Game Patch flow: open Game Patch (index 6) -> Enable/Reinstall -> confirm -> dismiss -> Restore -> confirm -> dismiss -> Back -> Menu
-                g = self._run_ra(["down", "down", "down", "down", "down", "down", "a",
-                                  "a", "a", "a",
-                                  "down", "a", "a", "a",
-                                  "b", "menu"])
-                st2 = ra_backend.picoarch_status()
-                self.assertEqual(st2["state"], "stock")
-                with open(dst, "rb") as f:
-                    self.assertEqual(f.read(), stock_bytes)
+                # UI Game Patch flow on both 240x240 and 240x160 (GBA Mini):
+                # open Game Patch (index 6) -> Enable/Reinstall -> confirm -> dismiss -> Restore -> confirm -> dismiss -> Back -> Menu
+                for gba_mini in (False, True):
+                    g = self._run_ra(
+                        ["down", "down", "down", "down", "down", "down", "a",
+                         "a", "a", "a",
+                         "down", "a", "a", "a",
+                         "b", "menu"],
+                        gba_mini=gba_mini,
+                    )
+                    st2 = ra_backend.picoarch_status()
+                    self.assertEqual(st2["state"], "stock")
+                    with open(dst, "rb") as f:
+                        self.assertEqual(f.read(), stock_bytes)
+                    msgs = [s[1] for s in g.seen if s[0] == "message"]
+                    self.assertIn("In-Game RA Ready", msgs)
+                    self.assertIn("Stock Restored", msgs)
+                    for s in g.seen:
+                        if s[0] == "message":
+                            for line in s[2]:
+                                self.assertLessEqual(g.fb.text_width(line), 240 - 12, f"line too wide: {line!r}")
+                            y_end = g._draw_lines(s[2], g.title_h + 6, wifi_gui.Pal.HI)
+                            self.assertLessEqual(y_end, g.h - g.foot_h, f"lines overflow height={g.h}: {s[2]!r}")
+                    if gba_mini:
+                        self.assertEqual(bytes(g.fb.buf[:48 * 480]), b"\x00" * (48 * 480))
+                        self.assertEqual(bytes(g.fb.buf[208 * 480:]), b"\x00" * (32 * 480))
+
+    def test_picoarch_self_check_rollback_squashfs_space_and_rw_preservation(self):
+        with tempfile.TemporaryDirectory() as d:
+            dst = os.path.join(d, "picoarch")
+            bak = os.path.join(d, "picoarch.orig")
+            src = os.path.join(d, "bundled_picoarch")
+            mounts = os.path.join(d, "proc_mounts")
+            stock_bytes = b"\x7fELFSTOCK_ORIGINAL"
+            ra_bytes = b"\x7fELF" + b"\x00" * 16 + b"/mnt/FunKey/raoffline" + b"\x00" * 16
+            with open(dst, "wb") as f:
+                f.write(stock_bytes)
+            with open(src, "wb") as f:
+                f.write(ra_bytes)
+
+            # 1. Self-check failure rolls back to .orig and raises ApiError
+            with open(mounts, "w", encoding="utf-8") as f:
+                f.write("rootfs / rootfs rw 0 0\n/dev/root / ext4 ro,relatime 0 0\n")
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "0",
+                "RA_PICOARCH_VERIFY": "1",
+                "RA_PROC_MOUNTS": mounts,
+            }), unittest.mock.patch("ra_backend._verify_picoarch_exec", return_value="missing libSDL"):
+                with self.assertRaises(ra_backend.ApiError) as ctx:
+                    ra_backend.install_picoarch()
+                self.assertIn("Restored stock binary", str(ctx.exception))
+            with open(dst, "rb") as f:
+                self.assertEqual(f.read(), stock_bytes)
+            self.assertTrue(os.path.isfile(bak))
+
+            # 2. squashfs root is rejected cleanly before mounting
+            with open(mounts, "w", encoding="utf-8") as f:
+                f.write("/dev/root / squashfs ro,relatime 0 0\n")
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "1",
+                "RA_PROC_MOUNTS": mounts,
+            }), unittest.mock.patch("ra_backend._remount_root") as remount_mock:
+                with self.assertRaises(ra_backend.ApiError) as ctx:
+                    ra_backend.install_picoarch()
+                self.assertIn("squashfs", str(ctx.exception).lower())
+                remount_mock.assert_not_called()
+
+            # 3. Already-rw root is NOT forced back to ro on completion
+            with open(mounts, "w", encoding="utf-8") as f:
+                f.write("rootfs / rootfs ro 0 0\n/dev/root / ext4 rw,relatime 0 0\n")
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "1",
+                "RA_PICOARCH_VERIFY": "0",
+                "RA_PROC_MOUNTS": mounts,
+            }), unittest.mock.patch("ra_backend._remount_root") as remount_mock:
+                ra_backend.install_picoarch()
+                remount_mock.assert_not_called()
+
+            # 4. Insufficient disk space is caught cleanly before touching files
+            fake_usage = type("Usage", (), {"total": 1000, "used": 990, "free": 10})()
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "0",
+            }), unittest.mock.patch("shutil.disk_usage", return_value=fake_usage):
+                with self.assertRaises(ra_backend.ApiError) as ctx:
+                    ra_backend.install_picoarch()
+                self.assertIn("Not enough space", str(ctx.exception))
+
+    def test_scan_onboarding_prompts_picoarch_and_clean_first_launch(self):
+        # Empty first-launch device (no cache, no wifi folder, no clock_sync, no ROMs)
+        empty_ro = os.path.join(T, "empty_roms")
+        empty_data = os.path.join(T, "empty_ra")
+        empty_wifi = os.path.join(T, "empty_wifi")
+        with unittest.mock.patch.dict(os.environ, {
+            "RA_ROMS": empty_ro,
+            "RA_DATA": empty_data,
+            "WIFI_DATA": empty_wifi,
+        }):
+            st = ra_backend.status_summary()
+            self.assertFalse(st["logged_in"])
+            self.assertFalse(st["clock_synced"])
+            self.assertEqual(st["roms_indexed"], 0)
+            self.assertIn(ra_backend.hub_tag(), ("sign in", "setup"))
+
+        # Matched ROM scan while stock picoarch active prompts user to install right away
+        rom_bytes = b"ONBOARD_GBA" * 128
+        rom_path = os.path.join(T, "roms", "Game Boy Advance", "AdvanceWars.gba")
+        with open(rom_path, "wb") as f:
+            f.write(rom_bytes)
+        md5_hex = hashlib.md5(rom_bytes).hexdigest()
+        self.srv.sets_by_hash[md5_hex] = {
+            "Success": True, "GameId": 888, "Title": "Advance Wars", "ConsoleId": 5, "Sets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as d:
+            dst = os.path.join(d, "picoarch")
+            bak = os.path.join(d, "picoarch.orig")
+            src = os.path.join(d, "bundled_picoarch")
+            with open(dst, "wb") as f:
+                f.write(b"\x7fELFSTOCK")
+            with open(src, "wb") as f:
+                f.write(b"\x7fELF" + b"\x00" * 8 + b"/mnt/FunKey/raoffline")
+
+            with unittest.mock.patch.dict(os.environ, {
+                "RA_PICOARCH_DST": dst,
+                "RA_PICOARCH_BAK": bak,
+                "RA_PICOARCH_SRC": src,
+                "RA_PICOARCH_REMOUNT": "0",
+            }):
+                # Scan ROMs (index 2) -> All Systems -> dismiss Scan Done -> Confirm Enable In-Game RA -> dismiss Ready -> Quit
+                g = self._run_ra(["down", "down", "a", "a", "a", "a", "a", "menu"])
+                self.assertEqual(ra_backend.picoarch_status()["state"], "active")
                 msgs = [s[1] for s in g.seen if s[0] == "message"]
+                self.assertIn("Scan Done", msgs)
                 self.assertIn("In-Game RA Ready", msgs)
-                self.assertIn("Stock Restored", msgs)
 
 
 if __name__ == "__main__":

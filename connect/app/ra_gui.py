@@ -335,6 +335,10 @@ def _do_scan(g):
         lines.append(f"Err: {res['error']}")
     title = "Scan Cancelled" if res.get("cancelled") else "Scan Done"
     g.message(title, _wrap(lines))
+    if not res.get("cancelled") and int(res.get("matched_games", 0) or 0) > 0:
+        pico = ra_backend.picoarch_status()
+        if pico.get("state") == "stock" and pico.get("bundled"):
+            _prompt_install_picoarch(g)
 
 
 def _picoarch_label(state: str) -> str:
@@ -344,6 +348,29 @@ def _picoarch_label(state: str) -> str:
         "stock": "install",
         "missing": "missing",
     }.get(state, state or "unknown")
+
+
+def _prompt_install_picoarch(g) -> bool:
+    """Confirm and install bundled RA picoarch, returning True on success."""
+    msg = [
+        "Replaces /usr/games/picoarch",
+        "to track unlocks offline.",
+        "Stock is kept as .orig.",
+    ]
+    if not g.confirm("Enable In-Game RA?", _wrap(msg)):
+        return False
+    g.busy("Game Patch", ["Installing picoarch...", "(syncing rootfs)"])
+    try:
+        ra_backend.install_picoarch()
+        g.message("In-Game RA Ready", _wrap([
+            "Patched picoarch installed.",
+            "RetroAchievements will now",
+            "track offline in games.",
+        ]))
+        return True
+    except ra_backend.ApiError as exc:
+        g.message("Install Failed", _wrap([str(exc)]))
+        return False
 
 
 def _game_patch_menu(g):
@@ -374,22 +401,7 @@ def _game_patch_menu(g):
             return "QUIT"
         act = actions[c]
         if act == "install":
-            msg = [
-                "Replaces /usr/games/picoarch",
-                "to track unlocks offline.",
-                "Stock is kept as .orig.",
-            ]
-            if g.confirm("Enable In-Game RA?", _wrap(msg)):
-                g.busy("Game Patch", ["Installing picoarch...", "(syncing rootfs)"])
-                try:
-                    ra_backend.install_picoarch()
-                    g.message("In-Game RA Ready", _wrap([
-                        "Patched picoarch installed.",
-                        "RetroAchievements will now",
-                        "track offline in games.",
-                    ]))
-                except ra_backend.ApiError as exc:
-                    g.message("Install Failed", _wrap([str(exc)]))
+            _prompt_install_picoarch(g)
         elif act == "restore":
             if g.confirm("Restore Stock?", _wrap([
                 "Restore /usr/games/",

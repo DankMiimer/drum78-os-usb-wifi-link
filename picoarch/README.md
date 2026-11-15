@@ -6,8 +6,8 @@ Stock [DrUm78/FunKey-OS](https://github.com/DrUm78/FunKey-OS) ships `/usr/games/
 
 ### Option A: Directly on the handheld (recommended, no PC needed)
 1. Install `Connect.opk` into `/mnt/Applications/`.
-2. Open **Connect → Achievements → Enable In-Game RA** (or **In-Game Support**).
-3. Connect remounts `/` read-write, backs up the stock binary to `/usr/games/picoarch.orig` (if not already backed up), atomically installs the bundled ARM `picoarch`, and remounts `/` read-only. You can select **Restore Stock picoarch** from the same menu anytime.
+2. Open **Connect → Achievements → Game Patch** and choose **Enable In-Game RA**.
+3. On writable ext4 FunKey-OS rootfs builds (e.g. DrUm78's releases for RG Nano, GBA Mini, and FunKey S), Connect checks free space, backs up stock `/usr/games/picoarch` to `/usr/games/picoarch.orig` (if not already backed up), atomically installs the bundled ARM binary, verifies `--help` execution (rolling back to `.orig` automatically if a library check fails), and restores `/` read-only when finished. You can select **Restore Stock** from the same menu anytime.
 
 ### Option B: Over USB ADB from a PC
 ```bash

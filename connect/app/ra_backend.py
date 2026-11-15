@@ -169,6 +169,11 @@ def _http_dorequest(params: dict[str, str], timeout: int = 20) -> tuple[dict, st
         raise ApiError("Invalid server JSON", retryable=True) from exc
     if not isinstance(obj, dict):
         raise ApiError("Unexpected response shape", retryable=False)
+    if server_utc:
+        try:
+            ra_clock.write_clock_sync(server_utc)
+        except Exception:
+            pass
     return obj, raw, server_utc
 
 
@@ -897,6 +902,23 @@ def _should_remount_root() -> bool:
     return emulator_dst_path().startswith("/usr/")
 
 
+def _root_mount_info() -> tuple[str, bool]:
+    """Return (fstype, is_rw) for '/' from /proc/mounts."""
+    mounts_path = os.environ.get("RA_PROC_MOUNTS", "/proc/mounts")
+    fstype = ""
+    is_rw = False
+    try:
+        with open(mounts_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4 and parts[1] == "/":
+                    fstype = parts[2]
+                    is_rw = "rw" in parts[3].split(",")
+    except OSError:
+        pass
+    return fstype, is_rw
+
+
 def _remount_root(rw: bool) -> None:
     if not _should_remount_root():
         return
@@ -910,6 +932,45 @@ def _remount_root(rw: bool) -> None:
     if res.returncode != 0 and rw:
         detail = (res.stderr or res.stdout or f"exit {res.returncode}").strip()
         raise ApiError(f"Could not mount / writable: {detail}")
+
+
+def _check_free_space(target_dir: str, needed_bytes: int) -> None:
+    try:
+        free = shutil.disk_usage(target_dir).free
+    except OSError:
+        return
+    if free < needed_bytes:
+        raise ApiError(
+            f"Not enough space ({free // 1024} KB free, need {needed_bytes // 1024} KB)."
+        )
+
+
+def _should_verify_picoarch() -> bool:
+    flag = os.environ.get("RA_PICOARCH_VERIFY")
+    if flag is not None:
+        return flag != "0"
+    return _should_remount_root()
+
+
+def _verify_picoarch_exec(dst: str) -> str | None:
+    """Run `<dst> --help` to confirm dynamic libs load cleanly. Returns None or error text."""
+    if not _should_verify_picoarch():
+        return None
+    try:
+        res = subprocess.run(
+            [dst, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except OSError as exc:
+        return str(exc)
+    except subprocess.TimeoutExpired:
+        return "timed out"
+    if res.returncode == 0:
+        return None
+    detail = (res.stderr or res.stdout or f"exit {res.returncode}").strip().splitlines()
+    return detail[-1][:80] if detail else f"exit {res.returncode}"
 
 
 def _copy_atomic_exec(src: str, dst: str) -> None:
@@ -971,6 +1032,7 @@ def install_picoarch() -> dict:
     try:
         with open(src, "rb") as f:
             magic = f.read(4)
+        src_size = os.path.getsize(src)
     except OSError as exc:
         raise ApiError(f"Cannot read bundled picoarch: {exc}") from exc
     if magic != b"\x7fELF":
@@ -978,20 +1040,47 @@ def install_picoarch() -> dict:
     expected_sha = _sha256_file(src)
     dst = emulator_dst_path()
     bak = emulator_backup_path()
+    dst_dir = os.path.dirname(dst) or "/"
+
+    fstype, was_rw = _root_mount_info() if _should_remount_root() else ("", False)
+    if _should_remount_root() and fstype == "squashfs":
+        raise ApiError("Root filesystem is read-only (squashfs); cannot patch picoarch.")
+
+    need_backup = os.path.isfile(dst) and not os.path.exists(bak) and not _binary_has_ra(dst)
+    _check_free_space(dst_dir, src_size * (2 if need_backup else 1) + (256 << 10))
+
     backed_up = False
-    _remount_root(True)
+    dst_existed = os.path.exists(dst)
+    if not was_rw:
+        _remount_root(True)
     try:
-        if os.path.isfile(dst) and not os.path.exists(bak) and not _binary_has_ra(dst):
+        if need_backup:
             _copy_atomic_exec(dst, bak)
             backed_up = True
         _copy_atomic_exec(src, dst)
+        sha_bad = _sha256_file(dst) != expected_sha
+        verify_err = "SHA-256 mismatch" if sha_bad else _verify_picoarch_exec(dst)
+        if verify_err:
+            rolled_back = False
+            if os.path.isfile(bak):
+                try:
+                    _copy_atomic_exec(bak, dst)
+                    rolled_back = True
+                except ApiError:
+                    pass
+            elif not dst_existed:
+                try:
+                    os.unlink(dst)
+                except OSError:
+                    pass
+            suffix = " Restored stock binary." if rolled_back else ""
+            raise ApiError(f"picoarch check failed ({verify_err}).{suffix}")
     finally:
-        try:
-            _remount_root(False)
-        except Exception:
-            pass
-    if _sha256_file(dst) != expected_sha:
-        raise ApiError("Installed picoarch verification failed (SHA-256 mismatch).")
+        if not was_rw:
+            try:
+                _remount_root(False)
+            except Exception:
+                pass
     return {"backed_up": backed_up or os.path.isfile(bak), "sha256": expected_sha}
 
 
@@ -1001,14 +1090,24 @@ def restore_picoarch() -> dict:
     bak = emulator_backup_path()
     if not os.path.isfile(bak):
         raise ApiError("No stock backup found at picoarch.orig.")
-    _remount_root(True)
+    fstype, was_rw = _root_mount_info() if _should_remount_root() else ("", False)
+    if _should_remount_root() and fstype == "squashfs":
+        raise ApiError("Root filesystem is read-only (squashfs).")
+    try:
+        bak_size = os.path.getsize(bak)
+    except OSError as exc:
+        raise ApiError(f"Cannot read picoarch.orig: {exc}") from exc
+    _check_free_space(os.path.dirname(dst) or "/", bak_size + (256 << 10))
+    if not was_rw:
+        _remount_root(True)
     try:
         _copy_atomic_exec(bak, dst)
     finally:
-        try:
-            _remount_root(False)
-        except Exception:
-            pass
+        if not was_rw:
+            try:
+                _remount_root(False)
+            except Exception:
+                pass
     return {"restored": True}
 
 
